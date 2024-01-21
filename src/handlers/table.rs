@@ -1,9 +1,18 @@
 // Function for creating a new table
 // Function for creating new columns for the new table
 
+use std::fmt::Display;
+
 use axum::{extract::State, http::StatusCode, response::Result};
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Postgres, QueryBuilder};
+use serde_json::{
+    map::{Keys, Values},
+    Value,
+};
+use sqlx::{
+    query_builder::{self, Separated},
+    Execute, PgPool, Postgres, QueryBuilder,
+};
 use tracing::debug;
 
 use crate::error::AppError;
@@ -18,84 +27,135 @@ pub struct Table {
 pub struct Column {
     name: String,
     data_type: String,
+    default: Option<Value>,
     is_optional: bool,
 }
 
 pub async fn create_table(
     State(pool): State<PgPool>,
-    axum::Json(payload): axum::Json<Table>,
+    axum::Json(table): axum::Json<Table>,
 ) -> Result<StatusCode, AppError> {
     let mut q_builder: QueryBuilder<'_, Postgres> =
-        QueryBuilder::new(format!("CREATE TABLE IF NOT EXISTS {} (", payload.name));
+        QueryBuilder::new("CREATE TABLE IF NOT EXISTS ");
 
-    // Table name
-    // q_builder.push(format_args!(" {} (", payload.name));
+    q_builder.push(&table.name);
 
-    // Table columns
-    for (i, column) in payload.columns.iter().enumerate() {
-        q_builder.push(format_args!(" {} {} ", column.name, column.data_type));
+    Column::build_columns(&mut q_builder, &table.columns);
 
-        if !column.is_optional {
-            q_builder.push(" NOT NULL ");
-        }
+    let sql = q_builder.sql();
 
-        if i < payload.columns.len() - 1 {
-            q_builder.push(" , ");
-        }
-    }
+    debug!("{}", sql);
 
-    q_builder.push(" ) ");
-
-    // TODO: Set "not null" if not optional
-
-    sqlx::query(q_builder.sql()).execute(&pool).await?;
-
-    debug!("{:?}", payload);
+    sqlx::query(sql).execute(&pool).await?;
 
     Ok(StatusCode::CREATED)
 }
 
 #[derive(Debug, Deserialize)]
-pub struct RowData {
+pub struct Row {
     table: String,
-    value: serde_json::Value,
+    value: Value,
 }
 
 pub async fn create_row(
     State(pool): State<PgPool>,
-    axum::Json(payload): axum::Json<RowData>,
+    axum::Json(row): axum::Json<Row>,
 ) -> Result<StatusCode, AppError> {
-    let obj = payload.value.as_object().ok_or(sqlx::Error::Protocol(
+    let obj = row.value.as_object().ok_or(sqlx::Error::Protocol(
         "Payload must be a JSON object".into(),
     ))?;
 
-    let mut q_builder: QueryBuilder<'_, Postgres> =
-        QueryBuilder::new(format!("INSERT INTO {} (", payload.table));
+    let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new("INSERT INTO ");
 
-    for (i, k) in obj.keys().into_iter().enumerate() {
-        q_builder.push(k);
+    q_builder.push(row.table.as_str());
 
-        if i < obj.len() - 1 {
-            q_builder.push(", ");
-        }
-    }
+    row.push_columns(&mut q_builder, obj.keys());
+    row.push_values(&mut q_builder, obj.values());
 
-    q_builder.push(") VALUES (");
+    let sql = q_builder.build().sql();
 
-    // TODO: Determine data type
-    for (i, v) in obj.values().into_iter().enumerate() {
-        q_builder.push(format_args!("'{}'", v));
+    debug!("{}", sql);
 
-        if i < obj.len() - 1 {
-            q_builder.push(", ");
-        }
-    }
-
-    q_builder.push(") ");
-
-    println!("{}", q_builder.sql());
-
-    sqlx::query(q_builder.sql()).execute(&pool).await?;
+    sqlx::query(sql).execute(&pool).await?;
 
     Ok(StatusCode::CREATED)
+}
+
+impl Column {
+    fn build_columns(q_builder: &mut QueryBuilder<'_, Postgres>, columns: &Vec<Column>) {
+        q_builder.push(" (");
+
+        for (i, column) in columns.iter().enumerate() {
+            if !column.is_optional {
+                q_builder.push(" NOT NULL ");
+            }
+
+            if let Some(ref default) = column.default {
+                Self::build_default(q_builder, default, column);
+            }
+
+            // NOTE: Set first element as primary key for now
+            if i == 0 {
+                q_builder.push(" PRIMARY KEY ");
+            }
+
+            if i < columns.len() - 1 {
+                q_builder.push(", ");
+            }
+        }
+
+        q_builder.push(") ");
+    }
+
+    // TODO: Handle default values better if the default is a function such as gen_random_uuid()
+    fn build_default(q_builder: &mut QueryBuilder<'_, Postgres>, default: &Value, column: &Column) {
+        match (default, column.data_type.as_str()) {
+            (Value::String(s), "uuid") => {
+                q_builder.push(format_args!(" DEFAULT {} ", s));
+            }
+            (Value::String(s), _) => {
+                q_builder.push(format_args!(" DEFAULT '{}' ", s));
+            }
+            _ => {
+                q_builder.push(format_args!(" DEFAULT {} ", default));
+            }
+        }
+    }
+}
+
+impl Row {
+    fn push_columns(
+        &self,
+        q_builder: &mut QueryBuilder<'_, Postgres>,
+        keys: Keys,
+    ) -> Result<(), AppError> {
+        let mut separated = q_builder.separated(", ");
+        separated.push_unseparated(" (");
+
+        for key in keys {
+            separated.push(key);
+        }
+
+        separated.push_unseparated(") ");
+
+        Ok(())
+    }
+
+    fn push_values(&self, q_builder: &mut QueryBuilder<'_, Postgres>, values: Values) {
+        let mut separated = q_builder.separated(", ");
+        separated.push_unseparated("VALUES (");
+
+        for val in values {
+            match val {
+                Value::String(s) => {
+                    separated.push(format_args!("'{}'", s));
+                }
+                _ => {
+                    separated.push(val);
+                }
+            }
+        }
+
+        separated.push_unseparated(") ");
+    }
 }
