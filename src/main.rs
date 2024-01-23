@@ -1,6 +1,6 @@
 // Ignore unused imports for now to remove some noise
-#![allow(unused_imports)]
-#![allow(warnings)]
+// #![allow(unused_imports)]
+// #![allow(warnings)]
 
 use axum::{
     http,
@@ -17,8 +17,9 @@ use tracing_subscriber::EnvFilter;
 
 mod error;
 mod handlers;
+mod utils;
 
-use handlers::{table, user};
+use handlers::{content, table, user};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<(), anyhow::Error> {
@@ -46,7 +47,8 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         .route("/", get(health))
         .route("/users", post(user::create_user))
         .route("/tables", post(table::create_table))
-        .route("/rows", post(table::create_row))
+        .route("/rows", post(content::insert))
+        .route("/contents", post(content::select).patch(content::update))
         .layer(CorsLayer::permissive())
         .with_state(pool);
 
