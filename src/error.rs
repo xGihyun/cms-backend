@@ -39,11 +39,10 @@ impl From<sqlx::Error> for AppError {
             }
             sqlx::Error::TypeNotFound { type_name: _ } => code = StatusCode::NOT_FOUND,
             sqlx::Error::Database(ref db_err) => match db_err.kind() {
-                sqlx::error::ErrorKind::ForeignKeyViolation => {
-                    code = StatusCode::UNPROCESSABLE_ENTITY
-                }
                 sqlx::error::ErrorKind::UniqueViolation => code = StatusCode::CONFLICT,
-                sqlx::error::ErrorKind::NotNullViolation => code = StatusCode::BAD_REQUEST,
+                sqlx::error::ErrorKind::NotNullViolation
+                | sqlx::error::ErrorKind::ForeignKeyViolation => code = StatusCode::BAD_REQUEST,
+                sqlx::error::ErrorKind::CheckViolation => code = StatusCode::UNPROCESSABLE_ENTITY,
                 _ => code = StatusCode::INTERNAL_SERVER_ERROR,
             },
             sqlx::Error::ColumnDecode {

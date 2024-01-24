@@ -1,6 +1,6 @@
 // Ignore unused imports for now to remove some noise
-// #![allow(unused_imports)]
-// #![allow(warnings)]
+#![allow(unused_imports)]
+#![allow(warnings)]
 
 use axum::{
     http,
@@ -47,8 +47,14 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         .route("/", get(health))
         .route("/users", post(user::create_user))
         .route("/tables", post(table::create_table))
-        .route("/rows", post(content::insert))
-        .route("/contents", post(content::select).patch(content::update))
+        .route(
+            "/contents",
+            get(content::select_many)
+                .post(content::insert)
+                .patch(content::update)
+                .delete(content::delete),
+        )
+        .route("/contents/:id", get(content::select_one))
         .layer(CorsLayer::permissive())
         .with_state(pool);
 

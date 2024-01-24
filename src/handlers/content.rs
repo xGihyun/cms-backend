@@ -1,4 +1,8 @@
-use axum::{extract::State, http::StatusCode, response::Result};
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::Result,
+};
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::{Execute, PgPool, Postgres, QueryBuilder, Row};
@@ -9,6 +13,13 @@ use crate::{error::AppError, utils};
 use super::table;
 
 #[derive(Debug, Deserialize)]
+pub enum Order {
+    Ascending(String),
+    Descending(String),
+}
+
+// Json body content
+#[derive(Debug, Deserialize)]
 pub struct Content {
     table: String,
     // Defaults to '*'
@@ -16,25 +27,37 @@ pub struct Content {
     // For WHERE clause
     // NOTE: Can only filter one column for now
     filters: Option<table::Column>,
+}
+
+// `Cs` stands for "Comma Separated"
+type CsString = String;
+
+// /contents/:id?table={table}&columns={columns}&limit={limit}&order_by={order_by}&order={order}
+#[derive(Debug, Deserialize)]
+pub struct SelectQuery {
+    table: String,
+    // Comma separated column/s
+    columns: Option<CsString>,
     limit: Option<i64>,
+    // Comma separated column/s to order by
+    order_by: Option<CsString>,
+    // ASC or DESC
+    // ASC by default
+    order: Option<String>,
 }
 
 // If `limit` is None, fetch all
 // If `limit` == 1, fetch one as a single object
 // If `limit` is any other number, fetch all based on the limit
-pub async fn select(
+pub async fn select_many(
     State(pool): State<PgPool>,
-    axum::Json(row): axum::Json<Content>,
+    Query(query): Query<SelectQuery>,
 ) -> Result<(StatusCode, axum::Json<Value>), AppError> {
-    let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new("SELECT ");
-
-    row.push_select(&mut q_builder);
-
-    let sql = q_builder.build().sql();
+    let sql = query.push_select().order().limit().sql();
 
     debug!("{}", sql);
 
-    let pg_rows = sqlx::query(sql).fetch_all(&pool).await?;
+    let pg_rows = sqlx::query(sql.as_str()).fetch_all(&pool).await?;
     let mut json_vec: Vec<Value> = Vec::new();
     let mut json_map = serde_json::Map::new();
 
@@ -46,14 +69,29 @@ pub async fn select(
         let json = serde_json::to_value(&json_map)?;
 
         json_vec.push(json);
-
         json_map.clear();
     }
 
-    let json: Value = match row.limit {
-        Some(1) => serde_json::to_value(json_vec.first().unwrap_or(&Value::Null))?,
-        _ => serde_json::to_value(&json_vec)?,
-    };
+    let json: Value = serde_json::to_value(&json_vec)?;
+
+    Ok((StatusCode::OK, axum::Json(json)))
+}
+
+pub async fn select_one(
+    State(pool): State<PgPool>,
+    Path(id): Path<String>,
+    Query(query): Query<SelectQuery>,
+) -> Result<(StatusCode, axum::Json<Value>), AppError> {
+    let sql = query.push_select().filter(id).sql();
+
+    debug!("{}", sql);
+
+    let pg_row = sqlx::query(sql.as_str()).fetch_one(&pool).await?;
+    let mut json_map = serde_json::Map::new();
+
+    utils::insert_col_to_map(&pg_row, pg_row.columns(), &mut json_map);
+
+    let json: Value = serde_json::to_value(&json_map)?;
 
     Ok((StatusCode::OK, axum::Json(json)))
 }
@@ -63,17 +101,11 @@ pub async fn insert(
     State(pool): State<PgPool>,
     axum::Json(row): axum::Json<Content>,
 ) -> Result<StatusCode, AppError> {
-    let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new("INSERT INTO ");
-
-    q_builder.push(row.table.as_str());
-
-    row.push_insert(&mut q_builder);
-
-    let sql = q_builder.build().sql();
+    let sql = row.push_insert();
 
     debug!("{}", sql);
 
-    sqlx::query(sql).execute(&pool).await?;
+    sqlx::query(sql.as_str()).execute(&pool).await?;
 
     Ok(StatusCode::CREATED)
 }
@@ -83,23 +115,35 @@ pub async fn update(
     State(pool): State<PgPool>,
     axum::Json(row): axum::Json<Content>,
 ) -> Result<StatusCode, AppError> {
-    let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new("UPDATE ");
-
-    q_builder.push(row.table.as_str());
-
-    row.push_update(&mut q_builder);
-
-    let sql = q_builder.build().sql();
+    let sql = row.push_update();
 
     debug!("{}", sql);
 
-    sqlx::query(sql).execute(&pool).await?;
+    sqlx::query(sql.as_str()).execute(&pool).await?;
 
     Ok(StatusCode::OK)
 }
 
+// DELETE FROM {table} WHERE id IN ({id})
+pub async fn delete(
+    State(pool): State<PgPool>,
+    axum::Json(row): axum::Json<Content>,
+) -> Result<StatusCode, AppError> {
+    let sql = row.push_delete();
+
+    debug!("{}", sql);
+
+    sqlx::query(sql.as_str()).execute(&pool).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 impl Content {
-    fn push_update(&self, q_builder: &mut QueryBuilder<'_, Postgres>) {
+    fn push_update(&self) -> String {
+        let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new("UPDATE ");
+
+        q_builder.push(self.table.as_str());
+
         if let (Some(columns), Some(filters)) = (self.columns.as_ref(), self.filters.as_ref()) {
             let mut comma_sep = q_builder.separated(", ");
 
@@ -118,11 +162,17 @@ impl Content {
                 }
             });
 
-            self.push_filter(q_builder);
+            self.push_filter(&mut q_builder);
         }
+
+        q_builder.build().sql().to_string()
     }
 
-    fn push_insert(&self, q_builder: &mut QueryBuilder<'_, Postgres>) {
+    fn push_insert(&self) -> String {
+        let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new("INSERT INTO ");
+
+        q_builder.push(self.table.as_str());
+
         if let Some(ref columns) = self.columns {
             let mut comma_sep = q_builder.separated(", ");
 
@@ -147,26 +197,18 @@ impl Content {
 
             comma_sep.push_unseparated(") ");
         }
+
+        q_builder.build().sql().to_string()
     }
 
-    fn push_select(&self, q_builder: &mut QueryBuilder<'_, Postgres>) {
-        if let Some(ref columns) = self.columns {
-            let mut separated = q_builder.separated(", ");
+    fn push_delete(&self) -> String {
+        let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new("DELETE FROM ");
 
-            columns.iter().for_each(|col| {
-                separated.push(&col.name);
-            })
-        } else {
-            q_builder.push("*");
-        };
+        q_builder.push(self.table.as_str());
 
-        q_builder.push(format_args!(" FROM {}", self.table));
+        self.push_filter(&mut q_builder);
 
-        self.push_filter(q_builder);
-
-        if let Some(ref limit) = self.limit {
-            q_builder.push(format_args!(" LIMIT {}", limit));
-        }
+        q_builder.build().sql().to_string()
     }
 
     fn push_filter(&self, q_builder: &mut QueryBuilder<'_, Postgres>) {
@@ -182,5 +224,71 @@ impl Content {
                 }
             }
         }
+    }
+}
+
+struct SqlBuilder<'a> {
+    builder: QueryBuilder<'a, Postgres>,
+    table: String,
+    // Comma separated column/s
+    columns: Option<CsString>,
+    limit: Option<i64>,
+    // Comma separated column/s to order by
+    order_by: Option<CsString>,
+    // ASC or DESC
+    // ASC by default
+    order: Option<String>,
+}
+
+impl SelectQuery {
+    fn push_select(self) -> SqlBuilder<'static> {
+        let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new("SELECT ");
+
+        if let Some(ref columns) = self.columns {
+            q_builder.push(columns);
+        } else {
+            q_builder.push("*");
+        };
+
+        q_builder.push(format_args!(" FROM {}", self.table));
+
+        SqlBuilder {
+            builder: q_builder,
+            table: self.table,
+            order: self.order,
+            columns: self.columns,
+            order_by: self.order_by,
+            limit: self.limit,
+        }
+    }
+}
+
+impl SqlBuilder<'_> {
+    fn sql(&self) -> String {
+        self.builder.sql().to_string()
+    }
+
+    fn order(&mut self) -> &mut Self {
+        if let (Some(ref column), Some(ref order)) = (&self.order_by, &self.order) {
+            self.builder
+                .push(format_args!(" ORDER BY {} {}", column, order));
+        }
+
+        self
+    }
+
+    fn limit(&mut self) -> &mut Self {
+        if let Some(ref limit) = self.limit {
+            self.builder.push(format_args!(" LIMIT {}", limit));
+        }
+
+        self
+    }
+
+    // NOTE: Assumes the filter is always an `id`
+    fn filter(&mut self, filter: String) -> &mut Self {
+        self.builder.push(format_args!(" WHERE id = '{}'", filter));
+
+        self
     }
 }
