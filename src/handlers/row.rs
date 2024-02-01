@@ -5,12 +5,12 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::Value;
-use sqlx::{Execute, PgPool, Postgres, QueryBuilder, Row};
+use sqlx::{Execute, PgPool, Postgres, QueryBuilder, Row as SqlxRow};
 use tracing::debug;
 
 use crate::{error::AppError, utils};
 
-use super::table;
+use super::column;
 
 #[derive(Debug, Deserialize)]
 pub enum Order {
@@ -20,13 +20,13 @@ pub enum Order {
 
 // Json body content
 #[derive(Debug, Deserialize)]
-pub struct Content {
+pub struct Row {
     table: String,
     // Defaults to '*'
-    columns: Option<Vec<table::Column>>,
+    columns: Option<Vec<column::Column>>,
     // For WHERE clause
     // NOTE: Can only filter one column for now
-    filters: Option<table::Column>,
+    filters: Option<column::Column>,
 }
 
 // `Cs` stands for "Comma Separated"
@@ -46,9 +46,7 @@ pub struct SelectQuery {
     order: Option<String>,
 }
 
-// If `limit` is None, fetch all
-// If `limit` == 1, fetch one as a single object
-// If `limit` is any other number, fetch all based on the limit
+// SELECT * FROM {table} WHERE {conditions} ORDER BY {order} LIMIT {limit}
 pub async fn select_many(
     State(pool): State<PgPool>,
     Query(query): Query<SelectQuery>,
@@ -77,6 +75,7 @@ pub async fn select_many(
     Ok((StatusCode::OK, axum::Json(json)))
 }
 
+// SELECT * FROM {table} WHERE {conditions}
 pub async fn select_one(
     State(pool): State<PgPool>,
     Path(id): Path<String>,
@@ -96,10 +95,10 @@ pub async fn select_one(
     Ok((StatusCode::OK, axum::Json(json)))
 }
 
-// INSERT INTO {table} (rows) VALUES (values)
+// INSERT INTO {table} {rows} VALUES {values}
 pub async fn insert(
     State(pool): State<PgPool>,
-    axum::Json(row): axum::Json<Content>,
+    axum::Json(row): axum::Json<Row>,
 ) -> Result<StatusCode, AppError> {
     let sql = row.push_insert();
 
@@ -113,7 +112,7 @@ pub async fn insert(
 // UPDATE {table} SET {row} = {value}, {row} = {value} WHERE {row} = {value}
 pub async fn update(
     State(pool): State<PgPool>,
-    axum::Json(row): axum::Json<Content>,
+    axum::Json(row): axum::Json<Row>,
 ) -> Result<StatusCode, AppError> {
     let sql = row.push_update();
 
@@ -127,7 +126,7 @@ pub async fn update(
 // DELETE FROM {table} WHERE id IN ({id})
 pub async fn delete(
     State(pool): State<PgPool>,
-    axum::Json(row): axum::Json<Content>,
+    axum::Json(row): axum::Json<Row>,
 ) -> Result<StatusCode, AppError> {
     let sql = row.push_delete();
 
@@ -138,7 +137,7 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
-impl Content {
+impl Row {
     fn push_update(&self) -> String {
         let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new("UPDATE ");
 
@@ -198,6 +197,8 @@ impl Content {
             comma_sep.push_unseparated(") ");
         }
 
+        q_builder.push(" RETURNING *");
+
         q_builder.build().sql().to_string()
     }
 
@@ -227,7 +228,7 @@ impl Content {
     }
 }
 
-struct SqlBuilder<'a> {
+struct SelectBuilder<'a> {
     builder: QueryBuilder<'a, Postgres>,
     table: String,
     // Comma separated column/s
@@ -241,7 +242,7 @@ struct SqlBuilder<'a> {
 }
 
 impl SelectQuery {
-    fn push_select(self) -> SqlBuilder<'static> {
+    fn push_select(self) -> SelectBuilder<'static> {
         let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new("SELECT ");
 
         if let Some(ref columns) = self.columns {
@@ -252,7 +253,7 @@ impl SelectQuery {
 
         q_builder.push(format_args!(" FROM {}", self.table));
 
-        SqlBuilder {
+        SelectBuilder {
             builder: q_builder,
             table: self.table,
             order: self.order,
@@ -263,7 +264,7 @@ impl SelectQuery {
     }
 }
 
-impl SqlBuilder<'_> {
+impl SelectBuilder<'_> {
     fn sql(&self) -> String {
         self.builder.sql().to_string()
     }

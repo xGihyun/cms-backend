@@ -1,6 +1,6 @@
 // Ignore unused imports for now to remove some noise
-#![allow(unused_imports)]
-#![allow(warnings)]
+// #![allow(unused_imports)]
+// #![allow(warnings)]
 
 use axum::{
     http,
@@ -19,7 +19,7 @@ mod error;
 mod handlers;
 mod utils;
 
-use handlers::{content, table, user};
+use handlers::{row, table, user};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<(), anyhow::Error> {
@@ -46,15 +46,19 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
     let app = Router::new()
         .route("/", get(health))
         .route("/users", post(user::create_user))
-        .route("/tables", post(table::create_table))
+        .route("/tables", get(table::get_tables).post(table::create_table))
         .route(
-            "/contents",
-            get(content::select_many)
-                .post(content::insert)
-                .patch(content::update)
-                .delete(content::delete),
+            "/tables/:name",
+            get(table::get_table).delete(table::delete_table),
         )
-        .route("/contents/:id", get(content::select_one))
+        .route(
+            "/rows",
+            get(row::select_many)
+                .post(row::insert)
+                .patch(row::update)
+                .delete(row::delete),
+        )
+        .route("/rows/:id", get(row::select_one))
         .layer(CorsLayer::permissive())
         .with_state(pool);
 

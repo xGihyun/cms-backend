@@ -1,102 +1,153 @@
 // Function for creating a new table
 // Function for creating new columns for the new table
 
-use axum::{extract::State, http::StatusCode, response::Result};
-use serde::Deserialize;
-use serde_json::Value;
-use sqlx::{Execute, PgPool, Postgres, QueryBuilder};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::Result,
+};
+use serde::{Deserialize, Serialize};
+use sqlx::{prelude::FromRow, Execute, PgPool, Postgres, QueryBuilder};
 use tracing::debug;
 
 use crate::error::AppError;
 
+use super::column;
+
 #[derive(Debug, Deserialize)]
 pub struct Table {
     name: String,
-    columns: Vec<InitColumn>,
+    columns: Vec<column::BuildColumn>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct InitColumn {
-    name: String,
+#[derive(Debug, Serialize, FromRow)]
+pub struct TableColumnInfo {
+    table_name: String,
+    column_name: String,
     data_type: String,
-    default: Option<Value>, // Optional default value
-    is_nullable: bool,      // Sets column to NOT NULL if true
+    is_nullable: String,
+    character_maximum_length: Option<i32>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct Column {
-    pub name: String,
-    pub value: Value,
+pub async fn get_tables(
+    State(pool): State<PgPool>,
+) -> Result<(StatusCode, axum::Json<Vec<TableColumnInfo>>), AppError> {
+    let tables = sqlx::query_as::<_, TableColumnInfo>(
+        r#"
+        SELECT
+            table_name,
+            column_name,
+            data_type,
+            is_nullable,
+            character_maximum_length
+        FROM
+            information_schema.columns
+        WHERE
+            table_schema = 'public' AND table_name <> '_sqlx_migrations';
+        "#,
+    )
+    .fetch_all(&pool)
+    .await?;
+
+    Ok((StatusCode::OK, axum::Json(tables)))
+}
+
+pub async fn get_table(
+    State(pool): State<PgPool>,
+    Path(name): Path<String>,
+) -> Result<(StatusCode, axum::Json<TableColumnInfo>), AppError> {
+    let table = sqlx::query_as::<_, TableColumnInfo>(
+        r#"
+        SELECT
+            table_name,
+            column_name,
+            data_type,
+            is_nullable,
+            character_maximum_length
+        FROM
+            information_schema.columns
+        WHERE
+            table_name = ($1);
+        "#,
+    )
+    .bind(name)
+    .fetch_one(&pool)
+    .await?;
+
+    Ok((StatusCode::OK, axum::Json(table)))
 }
 
 pub async fn create_table(
     State(pool): State<PgPool>,
     axum::Json(table): axum::Json<Table>,
-) -> Result<StatusCode, AppError> {
+) -> Result<(StatusCode, axum::Json<Vec<TableColumnInfo>>), AppError> {
+    let mut txn = pool.begin().await?;
+
+    let exists = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_schema = 'public' AND table_name = ($1)
+        );
+        "#,
+    )
+    .bind(&table.name)
+    .fetch_one(&mut *txn)
+    .await?;
+
+    if exists {
+        txn.rollback().await?;
+
+        return Err(AppError::new(
+            StatusCode::CONFLICT,
+            format!("Table \"{}\" already exists.", table.name),
+        ));
+    }
+
     let mut q_builder: QueryBuilder<'_, Postgres> =
         QueryBuilder::new("CREATE TABLE IF NOT EXISTS ");
 
     q_builder.push(&table.name);
 
-    InitColumn::build_columns(&mut q_builder, &table.columns);
+    column::BuildColumn::build_columns(&mut q_builder, &table.columns);
 
     let sql = q_builder.build().sql();
 
     debug!("{}", sql);
 
-    sqlx::query(sql).execute(&pool).await?;
+    sqlx::query(sql).execute(&mut *txn).await?;
 
-    Ok(StatusCode::CREATED)
+    let table = sqlx::query_as::<_, TableColumnInfo>(
+        r#"
+        SELECT
+            table_name,
+            column_name,
+            data_type,
+            is_nullable,
+            character_maximum_length
+        FROM
+            information_schema.columns
+        WHERE
+            table_name = ($1);
+        "#,
+    )
+    .bind(table.name)
+    .fetch_all(&mut *txn)
+    .await?;
+
+    txn.commit().await?;
+
+    Ok((StatusCode::CREATED, axum::Json(table)))
 }
 
-impl InitColumn {
-    fn build_columns(q_builder: &mut QueryBuilder<'_, Postgres>, columns: &Vec<InitColumn>) {
-        q_builder.push(" (");
+pub async fn delete_table(
+    State(pool): State<PgPool>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, AppError> {
+    sqlx::query("DROP table ($1)")
+        .bind(name)
+        .execute(&pool)
+        .await?;
 
-        for (i, column) in columns.iter().enumerate() {
-            q_builder.push(format_args!(
-                "{} {}",
-                column.name.as_str(),
-                column.data_type.as_str()
-            ));
-
-            if !column.is_nullable {
-                q_builder.push(" NOT NULL");
-            }
-
-            if let Some(ref default) = column.default {
-                Self::build_default(q_builder, default, column);
-            }
-
-            // NOTE: Set first element as primary key for now
-            if i == 0 {
-                q_builder.push(" PRIMARY KEY");
-            }
-
-            if i < columns.len() - 1 {
-                q_builder.push(", ");
-            }
-        }
-
-        q_builder.push(") ");
-    }
-
-    // TODO: Handle default values better if the default is a function such as gen_random_uuid()
-    fn build_default(
-        q_builder: &mut QueryBuilder<'_, Postgres>,
-        default: &Value,
-        column: &InitColumn,
-    ) {
-        match (default, column.data_type.as_str()) {
-            (Value::String(s), "uuid") => {
-                q_builder.push(format_args!(" DEFAULT {}", s));
-            }
-            (Value::String(s), _) => {
-                q_builder.push(format_args!(" DEFAULT '{}'", s));
-            }
-            _ => {
-                q_builder.push(format_args!(" DEFAULT {}", default));
-            }
-        }
-    }
+    Ok(StatusCode::NO_CONTENT)
 }
