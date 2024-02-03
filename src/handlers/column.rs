@@ -8,6 +8,8 @@ pub struct BuildColumn {
     data_type: String,
     default: Option<Value>, // Optional default value
     is_nullable: bool,      // Sets column to NOT NULL if true
+    is_primary_key: bool,
+    is_unique: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -35,8 +37,8 @@ impl BuildColumn {
                 Self::build_default(q_builder, default, column);
             }
 
-            // NOTE: Set first element as primary key for now
-            if i == 0 {
+            // NOTE: Assume there's one primary key for now
+            if column.is_primary_key {
                 q_builder.push(" PRIMARY KEY");
             }
 

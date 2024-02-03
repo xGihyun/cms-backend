@@ -8,7 +8,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{prelude::FromRow, Execute, PgPool, Postgres, QueryBuilder};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::error::AppError;
 
@@ -144,10 +144,12 @@ pub async fn delete_table(
     State(pool): State<PgPool>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    sqlx::query("DROP table ($1)")
-        .bind(name)
-        .execute(&pool)
-        .await?;
+    warn!("Deleting table: {}", name);
+
+    // NOTE: .bind() doesn't work?
+    let sql = format!("DROP TABLE IF EXISTS {}", name);
+
+    sqlx::query(sql.as_str()).execute(&pool).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
