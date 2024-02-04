@@ -46,7 +46,12 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
     let app = Router::new()
         .route("/", get(health))
         .route("/users", post(user::create_user))
-        .route("/tables", get(table::get_tables).post(table::create_table))
+        .route(
+            "/tables",
+            get(table::get_tables)
+                .post(table::create_table)
+                .delete(table::delete_tables),
+        )
         .route(
             "/tables/:name",
             get(table::get_table).delete(table::delete_table),

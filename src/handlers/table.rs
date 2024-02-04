@@ -2,12 +2,12 @@
 // Function for creating new columns for the new table
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Result,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{prelude::FromRow, Execute, PgPool, Postgres, QueryBuilder};
+use sqlx::{prelude::FromRow, query_builder, Execute, PgPool, Postgres, QueryBuilder};
 use tracing::{debug, warn};
 
 use crate::error::AppError;
@@ -55,7 +55,7 @@ pub async fn get_tables(
 pub async fn get_table(
     State(pool): State<PgPool>,
     Path(name): Path<String>,
-) -> Result<(StatusCode, axum::Json<TableColumnInfo>), AppError> {
+) -> Result<(StatusCode, axum::Json<Vec<TableColumnInfo>>), AppError> {
     let table = sqlx::query_as::<_, TableColumnInfo>(
         r#"
         SELECT
@@ -71,7 +71,7 @@ pub async fn get_table(
         "#,
     )
     .bind(name)
-    .fetch_one(&pool)
+    .fetch_all(&pool)
     .await?;
 
     Ok((StatusCode::OK, axum::Json(table)))
@@ -150,6 +150,38 @@ pub async fn delete_table(
     let sql = format!("DROP TABLE IF EXISTS {}", name);
 
     sqlx::query(sql.as_str()).execute(&pool).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteTableQuery {
+    names: String, // Comma separated table names
+}
+
+// NOTE: Cascades when dropping tables
+pub async fn delete_tables(
+    State(pool): State<PgPool>,
+    Query(query): Query<DeleteTableQuery>,
+) -> Result<StatusCode, AppError> {
+    let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new("DROP TABLE IF EXISTS ");
+    // let mut comma_sep = q_builder.separated(", ");
+    //
+    // tables.iter().for_each(|table| {
+    //     warn!("Deleting table: {}", table.name);
+    //     comma_sep.push(table.name.as_str());
+    // });
+
+    // comma_sep.push_unseparated(" CASCADE");
+
+    q_builder.push(query.names);
+    q_builder.push(" CASCADE");
+
+    let sql = q_builder.build().sql();
+
+    debug!("{sql}");
+
+    sqlx::query(sql).execute(&pool).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
