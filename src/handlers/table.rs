@@ -7,7 +7,7 @@ use axum::{
     response::Result,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{prelude::FromRow, query_builder, Execute, PgPool, Postgres, QueryBuilder};
+use sqlx::{prelude::FromRow, query_builder, Execute, PgPool, Postgres, QueryBuilder, Row};
 use tracing::{debug, warn};
 
 use crate::error::AppError;
@@ -18,6 +18,16 @@ use super::column;
 pub struct Table {
     name: String,
     columns: Vec<column::BuildColumn>,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct TableColumnInfoPk {
+    table_name: String,
+    column_name: String,
+    data_type: String,
+    is_nullable: String,
+    character_maximum_length: Option<i32>,
+    is_primary_key: bool,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -55,17 +65,31 @@ pub async fn get_tables(
 pub async fn get_table(
     State(pool): State<PgPool>,
     Path(name): Path<String>,
-) -> Result<(StatusCode, axum::Json<Vec<TableColumnInfo>>), AppError> {
-    let table = sqlx::query_as::<_, TableColumnInfo>(
+) -> Result<(StatusCode, axum::Json<Vec<TableColumnInfoPk>>), AppError> {
+    let table = sqlx::query_as::<_, TableColumnInfoPk>(
         r#"
+        WITH PrimaryKey AS (
+            SELECT 
+                a.attname, 
+                format_type(a.atttypid, a.atttypmod) AS data_type
+            FROM pg_index i
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+            WHERE i.indrelid = ($1)::regclass
+            AND i.indisprimary
+        )
         SELECT
-            table_name,
-            column_name,
-            data_type,
-            is_nullable,
-            character_maximum_length
+            cols.table_name,
+            cols.column_name,
+            cols.data_type,
+            cols.is_nullable,
+            cols.character_maximum_length,
+            CASE 
+                WHEN pk.attname IS NOT NULL THEN true
+                ELSE false
+            END AS is_primary_key
         FROM
-            information_schema.columns
+            information_schema.columns AS cols
+        LEFT JOIN PrimaryKey pk ON pk.attname = cols.column_name
         WHERE
             table_name = ($1);
         "#,
@@ -75,6 +99,29 @@ pub async fn get_table(
     .await?;
 
     Ok((StatusCode::OK, axum::Json(table)))
+}
+
+pub async fn foo(State(pool): State<PgPool>) -> Result<StatusCode, AppError> {
+    let table = sqlx::query(
+        r#"
+        SELECT a.attname, format_type(a.atttypid, a.atttypmod) AS data_type
+        FROM   pg_index i
+        JOIN   pg_attribute a ON a.attrelid = i.indrelid
+                            AND a.attnum = ANY(i.indkey)
+        WHERE  i.indrelid = 'test'::regclass
+        AND    i.indisprimary;
+    "#,
+    )
+    // .bind(name)
+    .fetch_all(&pool)
+    .await?;
+
+    table.iter().for_each(|row| {
+        let bar = row.get::<String, _>("attname");
+        println!("{:?}", bar);
+    });
+
+    Ok(StatusCode::OK)
 }
 
 pub async fn create_table(

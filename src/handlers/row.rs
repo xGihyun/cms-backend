@@ -153,7 +153,11 @@ impl Row {
 
                 match &col.value {
                     Value::String(s) => {
-                        comma_sep.push(format_args!("'{}'", s));
+                        if s == "gen_random_uuid()" || s == "now()" {
+                            comma_sep.push(s);
+                        } else {
+                            comma_sep.push(format_args!("'{}'", s));
+                        }
                     }
                     _ => {
                         comma_sep.push(&filters.value);
@@ -187,7 +191,11 @@ impl Row {
 
             columns.iter().for_each(|col| match &col.value {
                 Value::String(s) => {
-                    comma_sep.push(format_args!("'{}'", s));
+                    if s == "gen_random_uuid()" || s == "now()" {
+                        comma_sep.push(s);
+                    } else {
+                        comma_sep.push(format_args!("'{}'", s));
+                    }
                 }
                 _ => {
                     comma_sep.push(&col.value);

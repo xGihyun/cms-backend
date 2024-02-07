@@ -1,6 +1,6 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::{Postgres, QueryBuilder};
+use sqlx::{prelude::FromRow, Postgres, QueryBuilder};
 
 #[derive(Debug, Deserialize)]
 pub struct BuildColumn {
@@ -12,7 +12,7 @@ pub struct BuildColumn {
     is_unique: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, FromRow)]
 pub struct Column {
     pub name: String,
     pub value: Value,
