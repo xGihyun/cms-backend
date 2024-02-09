@@ -7,6 +7,7 @@ use axum::{
     response::Result,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::{prelude::FromRow, query_builder, Execute, PgPool, Postgres, QueryBuilder, Row};
 use tracing::{debug, warn};
 
@@ -24,6 +25,7 @@ pub struct Table {
 pub struct TableColumnInfoPk {
     table_name: String,
     column_name: String,
+    column_default: Option<String>,
     data_type: String,
     is_nullable: String,
     character_maximum_length: Option<i32>,
@@ -34,6 +36,7 @@ pub struct TableColumnInfoPk {
 pub struct TableColumnInfo {
     table_name: String,
     column_name: String,
+    column_default: Option<String>,
     data_type: String,
     is_nullable: String,
     character_maximum_length: Option<i32>,
@@ -47,6 +50,7 @@ pub async fn get_tables(
         SELECT
             table_name,
             column_name,
+            column_default,
             data_type,
             is_nullable,
             character_maximum_length
@@ -80,6 +84,7 @@ pub async fn get_table(
         SELECT
             cols.table_name,
             cols.column_name,
+            cols.column_default,
             cols.data_type,
             cols.is_nullable,
             cols.character_maximum_length,
@@ -99,29 +104,6 @@ pub async fn get_table(
     .await?;
 
     Ok((StatusCode::OK, axum::Json(table)))
-}
-
-pub async fn foo(State(pool): State<PgPool>) -> Result<StatusCode, AppError> {
-    let table = sqlx::query(
-        r#"
-        SELECT a.attname, format_type(a.atttypid, a.atttypmod) AS data_type
-        FROM   pg_index i
-        JOIN   pg_attribute a ON a.attrelid = i.indrelid
-                            AND a.attnum = ANY(i.indkey)
-        WHERE  i.indrelid = 'test'::regclass
-        AND    i.indisprimary;
-    "#,
-    )
-    // .bind(name)
-    .fetch_all(&pool)
-    .await?;
-
-    table.iter().for_each(|row| {
-        let bar = row.get::<String, _>("attname");
-        println!("{:?}", bar);
-    });
-
-    Ok(StatusCode::OK)
 }
 
 pub async fn create_table(
@@ -169,6 +151,7 @@ pub async fn create_table(
         SELECT
             table_name,
             column_name,
+            column_default,
             data_type,
             is_nullable,
             character_maximum_length
