@@ -54,7 +54,9 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         )
         .route(
             "/tables/:name",
-            get(table::get_table).delete(table::delete_table),
+            get(table::get_table)
+                .delete(table::delete_table)
+                .patch(table::update_table),
         )
         .route(
             "/rows",

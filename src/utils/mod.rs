@@ -17,6 +17,8 @@ pub fn get_value_from_row(row: &PgRow, field: &str) -> Value {
         json!(val)
     } else if let Ok(val) = row.try_get::<Option<i32>, _>(field) {
         json!(val)
+    } else if let Ok(val) = row.try_get::<Option<f32>, _>(field) {
+        json!(val)
     } else if let Ok(val) = row.try_get::<Option<f64>, _>(field) {
         json!(val)
     } else if let Ok(val) = row.try_get::<Option<NaiveDateTime>, _>(field) {

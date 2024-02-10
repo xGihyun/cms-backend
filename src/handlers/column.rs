@@ -4,22 +4,23 @@ use sqlx::{prelude::FromRow, Postgres, QueryBuilder};
 
 #[derive(Debug, Deserialize)]
 pub struct BuildColumn {
-    name: String,
-    data_type: String,
-    default: Option<Value>, // Optional default value
-    is_nullable: bool,      // Sets column to NOT NULL if true
-    is_primary_key: bool,
-    is_unique: bool,
+    pub name: String,
+    pub data_type: String,
+    pub default: Option<Value>, // Optional default value
+    pub is_nullable: bool,      // Sets column to NOT NULL if true
+    pub is_primary_key: bool,
+    pub is_unique: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, FromRow)]
-pub struct Column {
+pub struct InsertOnColumn {
     pub name: String,
     pub value: Value,
+    pub is_db_expression: bool,
 }
 
 impl BuildColumn {
-    pub fn build_columns(q_builder: &mut QueryBuilder<'_, Postgres>, columns: &Vec<BuildColumn>) {
+    pub fn build_columns(q_builder: &mut QueryBuilder<'_, Postgres>, columns: &[BuildColumn]) {
         q_builder.push(" (");
 
         for (i, column) in columns.iter().enumerate() {

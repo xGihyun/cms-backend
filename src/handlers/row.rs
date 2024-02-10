@@ -23,10 +23,10 @@ pub enum Order {
 pub struct Row {
     table: String,
     // Defaults to '*'
-    columns: Option<Vec<column::Column>>,
+    columns: Option<Vec<column::InsertOnColumn>>,
     // For WHERE clause
     // NOTE: Can only filter one column for now
-    filters: Option<column::Column>,
+    filters: Option<column::InsertOnColumn>,
 }
 
 // `Cs` stands for "Comma Separated"
@@ -189,20 +189,21 @@ impl Row {
 
             let mut comma_sep = q_builder.separated(", ");
 
-            columns.iter().for_each(|col| match &col.value {
-                Value::String(s) => {
-                    if s == "gen_random_uuid()" || s == "now()" {
+            columns
+                .iter()
+                .for_each(|col| match (&col.value, &col.is_db_expression) {
+                    (Value::String(s), true) => {
                         comma_sep.push(s);
-                    } else {
+                    }
+                    (Value::String(s), false) => {
                         comma_sep.push(format_args!("'{}'", s));
                     }
-                }
-                _ => {
-                    comma_sep.push(&col.value);
-                }
-            });
+                    _ => {
+                        comma_sep.push(&col.value);
+                    }
+                });
 
-            comma_sep.push_unseparated(") ");
+            comma_sep.push_unseparated(")");
         }
 
         q_builder.push(" RETURNING *");

@@ -9,7 +9,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{prelude::FromRow, query_builder, Execute, PgPool, Postgres, QueryBuilder, Row};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::error::AppError;
 
@@ -168,6 +168,35 @@ pub async fn create_table(
     txn.commit().await?;
 
     Ok((StatusCode::CREATED, axum::Json(table)))
+}
+
+pub async fn update_table(
+    State(pool): State<PgPool>,
+    Path(name): Path<String>,
+    axum::Json(columns): axum::Json<Vec<column::BuildColumn>>,
+) -> Result<StatusCode, AppError> {
+    info!("Updating table: {}", name);
+
+    let mut q_builder: QueryBuilder<'_, Postgres> =
+        QueryBuilder::new(format!("ALTER TABLE {} ", name));
+
+    let mut comma_sep = q_builder.separated(", ");
+
+    columns.iter().for_each(|col| {
+        comma_sep.push(format_args!(
+            "ADD COLUMN IF NOT EXISTS {} {}",
+            col.name.as_str(),
+            col.data_type.as_str()
+        ));
+    });
+
+    let sql = q_builder.build().sql();
+
+    debug!("{}", sql);
+
+    sqlx::query(sql).execute(&pool).await?;
+
+    Ok(StatusCode::OK)
 }
 
 pub async fn delete_table(
