@@ -123,16 +123,40 @@ pub async fn update(
     Ok(StatusCode::OK)
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DeleteRow {
+    table: String,
+    pkey_column: String,
+    values: Vec<Value>,
+}
+
 // DELETE FROM {table} WHERE id IN ({id})
 pub async fn delete(
     State(pool): State<PgPool>,
-    axum::Json(row): axum::Json<Row>,
+    axum::Json(row): axum::Json<DeleteRow>,
 ) -> Result<StatusCode, AppError> {
-    let sql = row.push_delete();
+    let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new("DELETE FROM ");
+    q_builder.push(row.table);
+    q_builder.push(format_args!(" WHERE {} IN (", row.pkey_column));
+
+    let mut comma_sep = q_builder.separated(", ");
+
+    row.values.iter().for_each(|pkey| match pkey {
+        Value::String(s) => {
+            comma_sep.push(format_args!("'{}'", s));
+        }
+        _ => {
+            comma_sep.push(pkey);
+        }
+    });
+
+    comma_sep.push_unseparated(")");
+
+    let sql = q_builder.build().sql();
 
     debug!("{}", sql);
 
-    sqlx::query(sql.as_str()).execute(&pool).await?;
+    sqlx::query(sql).execute(&pool).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -223,7 +247,7 @@ impl Row {
 
     fn push_filter(&self, q_builder: &mut QueryBuilder<'_, Postgres>) {
         if let Some(ref filters) = self.filters {
-            q_builder.push(format_args!(" WHERE {} = ", filters.name));
+            q_builder.push(format_args!(" WHERE {} in ", filters.name));
 
             match &filters.value {
                 Value::String(s) => {

@@ -12,6 +12,18 @@ pub struct BuildColumn {
     pub is_unique: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct EditColumn {
+    pub name: String,
+    pub data_type: String,
+    pub default: Option<Value>, // Optional default value
+    pub is_nullable: bool,      // Sets column to NOT NULL if true
+    pub is_primary_key: bool,
+    pub is_unique: bool,
+    // NOTE: Can this be an enum even if data is from JSON?
+    pub state: String, // "added" | "removed" | "modified" | "unchanged"
+}
+
 #[derive(Debug, Deserialize, Serialize, FromRow)]
 pub struct InsertOnColumn {
     pub name: String,

@@ -21,6 +21,12 @@ pub struct Table {
     columns: Vec<column::BuildColumn>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct EditTable {
+    name: String,
+    columns: Vec<column::EditColumn>,
+}
+
 #[derive(Debug, Serialize, FromRow)]
 pub struct TableColumnInfoPk {
     table_name: String,
@@ -173,7 +179,7 @@ pub async fn create_table(
 pub async fn update_table(
     State(pool): State<PgPool>,
     Path(name): Path<String>,
-    axum::Json(columns): axum::Json<Vec<column::BuildColumn>>,
+    axum::Json(table): axum::Json<EditTable>,
 ) -> Result<StatusCode, AppError> {
     info!("Updating table: {}", name);
 
@@ -182,13 +188,31 @@ pub async fn update_table(
 
     let mut comma_sep = q_builder.separated(", ");
 
-    columns.iter().for_each(|col| {
-        comma_sep.push(format_args!(
-            "ADD COLUMN IF NOT EXISTS {} {}",
-            col.name.as_str(),
-            col.data_type.as_str()
-        ));
-    });
+    table
+        .columns
+        .iter()
+        .for_each(|col| match col.state.as_str() {
+            "added" => {
+                info!("Adding column: {}", col.name);
+                comma_sep.push(format_args!(
+                    "ADD COLUMN IF NOT EXISTS {} {}",
+                    col.name.as_str(),
+                    col.data_type.as_str()
+                ));
+            }
+            "removed" => {
+                warn!("Removing column: {}", col.name);
+                comma_sep.push(format_args!("DROP COLUMN IF EXISTS {}", col.name.as_str()));
+            }
+            "modified" => {
+                // NOTE: I might need a reference to the old table in order to modify
+                info!("Updating column: {}", col.name);
+            }
+            "unchanged" => {}
+            _ => {
+                warn!("Invalid column state.")
+            }
+        });
 
     let sql = q_builder.build().sql();
 
