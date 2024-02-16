@@ -23,7 +23,7 @@ pub struct Table {
 
 #[derive(Debug, Deserialize)]
 pub struct EditTable {
-    name: String,
+    name: String, // New table name
     columns: Vec<column::EditColumn>,
 }
 
@@ -135,7 +135,7 @@ pub async fn create_table(
 
         return Err(AppError::new(
             StatusCode::CONFLICT,
-            format!("Table \"{}\" already exists.", table.name),
+            format!("Table `{}` already exists.", table.name),
         ));
     }
 
@@ -207,6 +207,36 @@ pub async fn update_table(
             "modified" => {
                 // NOTE: I might need a reference to the old table in order to modify
                 info!("Updating column: {}", col.name);
+
+                // Only contains two elements, the old name and the new name
+                let names: Vec<&str> = col.name.split(',').collect();
+
+                if names.len() > 1 {
+                    comma_sep.push(format_args!("RENAME COLUMN {} TO {}", names[0], names[1]));
+                }
+
+                match col.default.as_ref() {
+                    Some(Value::String(s)) => {
+                        comma_sep.push(format_args!(
+                            "ALTER COLUMN {} SET DEFAULT '{}'",
+                            names[0], s
+                        ));
+                    }
+                    Some(default) => {
+                        comma_sep.push(format_args!(
+                            "ALTER COLUMN {} SET DEFAULT {}",
+                            names[0], default
+                        ));
+                    }
+                    None => {
+                        comma_sep.push(format_args!("ALTER COLUMN {} DROP DEFAULT", names[0]));
+                    }
+                }
+
+                comma_sep.push(format_args!(
+                    "ALTER COLUMN {} SET DATA TYPE {}",
+                    names[0], col.data_type
+                ));
             }
             "unchanged" => {}
             _ => {
